@@ -3,8 +3,17 @@
   const $ = id => document.getElementById(id);
   const MAX_FILE_SIZE = 5 * 1024 * 1024;
   const state = { token: '', authenticated: false, leaving: false, file: null, current: null,
-    uploadBusy: false, questionBusy: false, uploadId: 0, questionId: 0, authId: 0, questions: [] };
+    uploadBusy: false, categoryBusy: '', categoryWorkflowEntered: false, selectedCategory: '',
+    categoryQuestions: Object.create(null), categoryErrors: Object.create(null), uploadId: 0, questionId: 0, authId: 0 };
   let authRequest, uploadRequest, questionRequest;
+  const questionCategories = [
+    { id: 'domain_fundamentals', label: 'Role & Domain Fundamentals', description: 'Explore core principles and trade-offs that shape the target role and its technical domain.' },
+    { id: 'technical_concepts', label: 'Technical Skills & Concepts', description: 'Assess practical understanding of the skills and technologies evidenced in the resume.' },
+    { id: 'project_deep_dive', label: 'Project Deep Dive', description: 'Probe real project decisions, individual contributions, constraints and verification.' },
+    { id: 'professional_experience', label: 'Professional Experience', description: 'Discuss responsibilities, delivery, challenges and outcomes from the resume.' },
+    { id: 'applied_scenarios', label: 'Applied Technical Scenarios', description: 'Work through realistic hypothetical technical problems using relevant resume skills.' },
+    { id: 'behavioral_collaboration', label: 'Behavioral & Collaboration', description: 'Explore communication, collaboration, feedback, ownership and learning.' },
+  ];
   const tabs = ['tabOverview', 'tabDetails'].map($);
   const panels = ['overviewPanel', 'detailsPanel'].map($);
   const text = value => typeof value === 'string' || typeof value === 'number' ? String(value) : '';
@@ -82,26 +91,168 @@
     $('setupForm').setAttribute('aria-busy', String(state.uploadBusy));
     $('processing').hidden = !state.uploadBusy;
     $('editSetup').disabled = state.uploadBusy;
-    $('questionsList').setAttribute('aria-busy', String(state.questionBusy));
-    $('prepareQuestions').disabled = !state.current || state.uploadBusy || state.questionBusy || !state.authenticated;
-    if (state.questionBusy) $('prepareQuestions').textContent = 'Preparing questions...';
+    $('prepareQuestions').disabled = !state.current || state.uploadBusy || !state.authenticated;
     $('stepAnalysis').disabled = !state.current;
-    $('stepQuestions').disabled = !state.questions.length || !state.authenticated || state.uploadBusy;
-    $('questionsStepHelp').hidden = Boolean(state.questions.length);
-    $('questionsStepHelp').textContent = state.questions.length ? '' : 'Locked: prepare questions from Overview';
-    if (state.questions.length) $('stepQuestions').removeAttribute('aria-describedby');
+    $('stepQuestions').disabled = !state.current || !state.categoryWorkflowEntered || !state.authenticated || state.uploadBusy;
+    $('questionsStepHelp').hidden = state.categoryWorkflowEntered;
+    $('questionsStepHelp').textContent = state.categoryWorkflowEntered ? '' : 'Locked: choose Prepare Interview Questions from Overview';
+    if (state.categoryWorkflowEntered) $('stepQuestions').removeAttribute('aria-describedby');
     else $('stepQuestions').setAttribute('aria-describedby', 'questionsStepHelp');
+    $('questionsStepState').textContent = state.categoryWorkflowEntered ? 'Choose a category' : 'Prepare from your results';
+    renderCategoryInterface();
   }
   function setStep(index) {
     ['stepResume', 'stepAnalysis', 'stepQuestions'].forEach((id, i) => {
       if (i === index) $(id).setAttribute('aria-current', 'step'); else $(id).removeAttribute('aria-current');
     });
     const inQuestions = index === 2;
+    $('resumeWorkspaceSummary').hidden = inQuestions;
     $('tabs').hidden = inQuestions;
     $('questionsStatus').hidden = inQuestions;
     $('overviewPanel').hidden = inQuestions || $('tabOverview').getAttribute('aria-selected') !== 'true';
     $('detailsPanel').hidden = inQuestions || $('tabDetails').getAttribute('aria-selected') !== 'true';
     $('questionsPanel').hidden = !inQuestions;
+  }
+  function selectCategory(categoryId, restoreFocus = false) {
+    if (!questionCategories.some((category) => category.id === categoryId)) return;
+    state.selectedCategory = categoryId;
+    renderCategoryInterface();
+    if (restoreFocus) $(`select-category-${categoryId}`).focus();
+  }
+  function renderCategoryInterface() {
+    const checklist = $('categoryChecklist');
+    if (!checklist) return;
+    const snapshot = state.current?.snapshot;
+    $('questionContext').textContent = [
+      snapshot?.targetRole,
+      snapshot?.interviewType && `${snapshot.interviewType} interview`,
+    ].filter(Boolean).join(' · ') || 'Your current resume and interview context';
+    checklist.replaceChildren();
+    let preparedCount = 0;
+    for (const [index, category] of questionCategories.entries()) {
+      const record = state.categoryQuestions[category.id];
+      const ready = Boolean(record?.questions?.length);
+      if (ready) preparedCount += 1;
+      const isSelected = state.selectedCategory === category.id;
+      const isBusy = state.categoryBusy === category.id;
+      const row = node('li', '', 'category-checklist-item' + (ready ? ' is-ready' : '') + (isSelected ? ' is-selected' : ''));
+      const select = node('button', '', 'category-select');
+      select.type = 'button'; select.id = `select-category-${category.id}`;
+      select.setAttribute('aria-current', String(isSelected));
+      select.dataset.ready = String(ready);
+      const indicator = node('span', ready ? '✓' : String(index + 1), 'category-indicator');
+      indicator.setAttribute('aria-hidden', 'true');
+      const copy = node('span', '', 'category-copy');
+      copy.append(node('span', category.label, 'category-name'));
+      const rowStatus = node('span', isBusy && !ready ? 'Generating…' : ready ? 'Questions ready' : state.categoryErrors[category.id] ? 'Generation failed' : 'Not started', 'category-checklist-status' + (ready ? ' is-ready' : '') + (state.categoryErrors[category.id] && !ready ? ' is-error' : ''));
+      copy.append(rowStatus);
+      if (isBusy && ready) copy.append(node('span', 'Regenerating… Existing set available', 'category-substatus'));
+      else if (state.categoryErrors[category.id] && ready) copy.append(node('span', 'Regeneration failed; existing set kept', 'category-substatus is-error'));
+      select.append(indicator, copy);
+      select.addEventListener('click', () => selectCategory(category.id, true));
+      row.append(select);
+      checklist.append(row);
+    }
+    const progressLabel = `${preparedCount} of ${questionCategories.length} categories prepared`;
+    $('preparedCount').textContent = progressLabel;
+    $('preparedProgress').setAttribute('aria-valuenow', String(preparedCount));
+    $('preparedProgress').setAttribute('aria-valuetext', progressLabel);
+    $('preparedProgressFill').style.width = `${preparedCount / questionCategories.length * 100}%`;
+
+    const selected = questionCategories.find((category) => category.id === state.selectedCategory);
+    const record = selected && state.categoryQuestions[selected.id];
+    const selectedBusy = Boolean(selected && state.categoryBusy === selected.id);
+    const anotherCategoryBusy = Boolean(state.categoryBusy && selected && state.categoryBusy !== selected.id);
+    const hasQuestions = Boolean(record?.questions?.length);
+    $('selectedCategoryTitle').textContent = selected?.label || 'Select a question category';
+    $('selectedCategoryDescription').textContent = selected?.description || 'Choose a category to view its workspace.';
+    $('categoryQuestionList').replaceChildren(); $('categorySource').replaceChildren();
+    $('selectedCategoryStatus').replaceChildren();
+    $('selectedCategoryStatus').className = 'category-workspace-status';
+    $('selectedCategoryError').hidden = true;
+    $('selectedCategoryError').textContent = '';
+    $('generateCategoryButton').disabled = !selected || !state.current || selectedBusy || Boolean(state.categoryBusy) || state.uploadBusy || !state.authenticated;
+    $('generateCategorySpinner').hidden = !selectedBusy;
+    $('generateCategoryLabel').textContent = selectedBusy ? 'Generating…' : anotherCategoryBusy ? 'Generation in progress' : hasQuestions ? 'Regenerate Questions' : state.categoryErrors[selected?.id] ? 'Retry generation' : 'Generate 6 Questions';
+    $('categoryActionDescription').textContent = selectedBusy
+      ? 'Generating questions for this category only…'
+      : anotherCategoryBusy ? `Generating ${questionCategories.find((category) => category.id === state.categoryBusy)?.label || 'another category'} questions. You can continue reviewing this category.`
+      : hasQuestions ? 'Generate a fresh set only when you choose. Your current questions remain until a replacement succeeds.'
+        : state.categoryErrors[selected?.id] ? 'No usable question set is available yet. Retry to try again.'
+          : 'Generate six questions for this category only. Your other category sets will stay available.';
+    if (!selected) {
+      $('selectedCategoryStatus').textContent = 'Choose a category to view or generate its questions.';
+      return;
+    }
+    if (selectedBusy) {
+      $('selectedCategoryStatus').classList.add('is-loading');
+      const spinner = node('span', '', 'spinner'); spinner.setAttribute('aria-hidden', 'true');
+      $('selectedCategoryStatus').append(spinner, node('span', hasQuestions ? 'Regenerating questions… Your current set remains available.' : 'Generating questions…'));
+    } else if (anotherCategoryBusy) {
+      const spinner = node('span', '', 'spinner'); spinner.setAttribute('aria-hidden', 'true');
+      const busyName = questionCategories.find((category) => category.id === state.categoryBusy)?.label || 'another category';
+      $('selectedCategoryStatus').classList.add(hasQuestions ? 'is-ready' : 'is-loading');
+      $('selectedCategoryStatus').append(
+        ...(hasQuestions ? [node('span', 'Questions ready.')] : []),
+        spinner,
+        node('span', `Generating questions for ${busyName}.`),
+      );
+    } else if (hasQuestions) {
+      $('selectedCategoryStatus').classList.add('is-ready');
+      $('selectedCategoryStatus').textContent = 'Questions ready';
+    } else if (state.categoryErrors[selected.id]) {
+      $('selectedCategoryStatus').classList.add('is-error');
+      $('selectedCategoryStatus').textContent = 'Generation failed';
+    } else {
+      $('selectedCategoryStatus').textContent = 'Not started';
+    }
+    if (state.categoryErrors[selected.id]) {
+      const retainedSetMessage = hasQuestions ? ' Your previous question set is still available.' : '';
+      $('selectedCategoryError').textContent = `${state.categoryErrors[selected.id]}${retainedSetMessage}`;
+      $('selectedCategoryError').hidden = false;
+    }
+    if (hasQuestions) {
+      source($('categorySource'), record.source);
+      record.questions.forEach((question) => {
+        const item = node('li'); item.append(node('p', question.question, 'question-body'));
+        const meta = node('div', '', 'question-meta');
+        if (text(question.type)) meta.append(node('span', question.type, 'badge'));
+        if (text(question.basedOn)) meta.append(node('p', 'Based on: ' + text(question.basedOn)));
+        item.append(meta); $('categoryQuestionList').append(item);
+      });
+    }
+  }
+  async function generateCategory(categoryId) {
+    if (!state.current || state.categoryBusy || state.uploadBusy || !state.authenticated || state.leaving) return;
+    const category = questionCategories.find((item) => item.id === categoryId);
+    if (!category) return;
+    selectCategory(categoryId);
+    const resumeId = state.current.id;
+    const uploadId = state.uploadId;
+    const requestId = ++state.questionId;
+    questionRequest?.abort(); questionRequest = new AbortController();
+    const isCurrent = () => requestId === state.questionId && uploadId === state.uploadId && resumeId === state.current?.id && !state.leaving;
+    state.categoryBusy = categoryId; delete state.categoryErrors[categoryId];
+    syncControls();
+    try {
+      const response = await fetch(`/api/resume/${encodeURIComponent(resumeId)}/questions/${encodeURIComponent(categoryId)}`, {
+        method: 'POST', headers: headers(), signal: questionRequest.signal,
+      });
+      if (!isCurrent()) return;
+      if (unauthorized(response)) return;
+      const data = await response.json().catch(() => ({}));
+      if (!isCurrent()) return;
+      if (!response.ok || data.category !== categoryId || !Array.isArray(data.questions) || !data.questions.length ||
+          !['ollama-llama3.2', 'heuristic-fallback'].includes(data.source)) {
+        throw new Error(typeof data.error === 'string' ? data.error : 'No usable questions were returned. Please retry.');
+      }
+      state.categoryQuestions[categoryId] = { questions: data.questions, source: data.source };
+    } catch (error) {
+      if (!isCurrent() || error.name === 'AbortError') return;
+      state.categoryErrors[categoryId] = error.message || 'Unable to generate questions. Please retry.';
+    } finally {
+      if (isCurrent()) { state.categoryBusy = ''; syncControls(); }
+    }
   }
   function selectTab(index, focus = false) {
     tabs.forEach((tab, i) => {
@@ -134,11 +285,19 @@
   $('stepResume').addEventListener('click', () => { expandSetup(); focusSection($('setupTitle')); });
   $('stepAnalysis').addEventListener('click', () => { selectTab(0); focusSection($('resultsTitle')); });
   $('stepQuestions').addEventListener('click', () => {
-    if (!state.questions.length || $('stepQuestions').disabled) return;
+    if (!state.categoryWorkflowEntered || $('stepQuestions').disabled) return;
     setStep(2); focusSection($('questionsStageTitle'));
   });
   $('viewDetails').addEventListener('click', () => selectTab(1, true));
   $('backToOverview').addEventListener('click', () => { selectTab(0); $('tabOverview').focus(); });
+  $('prepareQuestions').addEventListener('click', () => {
+    if (!state.current || state.uploadBusy || !state.authenticated || state.leaving) return;
+    state.categoryWorkflowEntered = true;
+    if (!state.selectedCategory) state.selectedCategory = questionCategories[0].id;
+    syncControls(); setStep(2); focusSection($('questionsStageTitle'));
+  });
+  $('generateCategoryButton').addEventListener('click', () => generateCategory(state.selectedCategory));
+  $('backToAnalysis').addEventListener('click', () => { selectTab(0); focusSection($('resultsTitle')); });
 
   function markDraft() {
     if (state.current) $('setupHelp').textContent = 'Changes apply when you analyze again. Current results keep their submitted context.';
@@ -272,9 +431,7 @@
     $('extractionNotes').hidden = !warnings.length; $('extractionNotes').open = false;
     $('extractionNotesList').replaceChildren(); warnings.forEach(warning => $('extractionNotesList').append(node('li', warning)));
     $('rawJson').textContent = JSON.stringify(data, null, 2); $('technicalDetails').open = false;
-    $('questionsList').replaceChildren(); $('questionsSource').replaceChildren(); status('questionsStatus');
-    $('questionsEmpty').hidden = false;
-    $('questionsEmpty').replaceChildren(node('h4', 'Your next step: prepare your answers'), node('p', 'Generate questions to explore your skills, projects and experience.'));
+    status('questionsStatus');
     $('prepareQuestions').textContent = 'Prepare interview questions';
     $('workspacePlaceholder').hidden = true; $('results').hidden = false;
     $('previousResultsNote').hidden = true; $('editSetup').hidden = false;
@@ -289,7 +446,7 @@
     const snapshot = { file: state.file, targetRole: $('targetRole').value, interviewType: $('interviewType').value || 'Technical' };
     const id = ++state.uploadId;
     uploadRequest?.abort(); uploadRequest = new AbortController();
-    state.questionId++; questionRequest?.abort(); state.questionBusy = false;
+    state.questionId++; questionRequest?.abort(); state.categoryBusy = '';
     status('questionsStatus');
     state.uploadBusy = true; status('uploadStatus'); syncControls();
     $('previousResultsNote').hidden = !state.current;
@@ -309,7 +466,9 @@
         status('uploadStatus', message, 'error'); return;
       }
       if (typeof data.resumeId !== 'string' || !data.parsedResume || typeof data.parsedResume !== 'object') throw new Error('response');
-      state.current = { id: data.resumeId, snapshot }; state.questions = [];
+      state.current = { id: data.resumeId, snapshot };
+      state.categoryQuestions = Object.create(null); state.categoryErrors = Object.create(null);
+      state.categoryWorkflowEntered = false; state.selectedCategory = '';
       renderResults(data, snapshot);
       status('uploadStatus', 'Analysis ready. Your results are below.', 'success');
     } catch (err) {
@@ -323,51 +482,6 @@
     }
   });
 
-  $('prepareQuestions').addEventListener('click', async () => {
-    if (!state.current || state.questionBusy || state.uploadBusy || !state.authenticated || state.leaving) return;
-    const resumeId = state.current.id;
-    const uploadId = state.uploadId;
-    const id = ++state.questionId;
-    questionRequest?.abort(); questionRequest = new AbortController();
-    const current = () => id === state.questionId && uploadId === state.uploadId && resumeId === state.current?.id && !state.leaving;
-    state.questionBusy = true; syncControls();
-    $('prepareQuestions').textContent = 'Preparing questions...';
-    status('questionsStatus', state.questions.length ? 'Preparing a new set. Your previous questions remain below.' : 'Preparing questions from your resume and interview context...');
-    try {
-      const res = await fetch(`/api/resume/${encodeURIComponent(resumeId)}/questions`, { headers: headers(), signal: questionRequest.signal });
-      if (!current()) return;
-      if (unauthorized(res)) return;
-      const data = await res.json().catch(() => ({}));
-      if (!current()) return;
-      if (!res.ok) throw new Error('request');
-      const questions = records(data.questions).filter(q => text(q.question).trim());
-      if (!questions.length) {
-        status('questionsStatus', 'No questions were returned. Try generating again. Any previous questions are still shown.', 'warning');
-        $('prepareQuestions').textContent = 'Retry question preparation'; return;
-      }
-      const fragment = document.createDocumentFragment();
-      questions.forEach(question => {
-        const li = node('li'); li.append(node('p', question.question, 'question-body'));
-        const meta = node('div', '', 'question-meta');
-        if (text(question.type)) meta.append(node('span', question.type, 'badge'));
-        if (text(question.basedOn)) meta.append(node('p', 'Based on: ' + text(question.basedOn)));
-        li.append(meta); fragment.append(li);
-      });
-      $('questionsList').replaceChildren(fragment); state.questions = questions;
-      $('questionsEmpty').hidden = true; source($('questionsSource'), data.source);
-      status('questionsStatus', `${questions.length} questions ready. Take your time and practice each answer.`, 'success');
-      $('prepareQuestions').textContent = 'Regenerate interview questions';
-      $('questionsStepState').textContent = 'Questions ready';
-      syncControls();
-      setStep(2); focusSection($('questionsStageTitle'));
-    } catch (err) {
-      if (!current() || err.name === 'AbortError') return;
-      status('questionsStatus', 'Unable to generate questions. Please retry. Any previous questions remain available below.', 'error');
-      $('prepareQuestions').textContent = 'Retry question preparation';
-    } finally {
-      if (current()) { state.questionBusy = false; syncControls(); }
-    }
-  });
   window.addEventListener('storage', event => {
     if (event.key === 'resumeAppToken' || event.key === null) {
       state.leaving = true; invalidateRequests(); $('workspace').hidden = true; window.location.reload();

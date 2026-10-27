@@ -27,7 +27,8 @@
 const axios = require('axios');
 const { StringDecoder } = require('node:string_decoder');
 const interviewPlannerService = require('./interviewPlannerService');
-const { validateGeneratedQuestions } = require('./questionValidatorService');
+const { validateGeneratedQuestions, validateGeneratedCategoryQuestions } = require('./questionValidatorService');
+const { QUESTION_COUNT_PER_CATEGORY, getQuestionCategory } = require('./questionCategories');
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.2';
@@ -47,13 +48,20 @@ const QUESTION_RESPONSE_SCHEMA = {
   },
   required: ['questions'], additionalProperties: false,
 };
+const CATEGORY_QUESTION_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    questions: { type: 'array', minItems: QUESTION_COUNT_PER_CATEGORY, maxItems: QUESTION_COUNT_PER_CATEGORY, items: { type: 'string' } },
+  },
+  required: ['questions'], additionalProperties: false,
+};
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function generate(prompt, timeout, onFirstChunk) {
+async function generate(prompt, timeout, onFirstChunk, responseSchema = QUESTION_RESPONSE_SCHEMA) {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -87,7 +95,7 @@ async function generate(prompt, timeout, onFirstChunk) {
         model: OLLAMA_MODEL,
         prompt,
         stream: true,
-        format: QUESTION_RESPONSE_SCHEMA,
+        format: responseSchema,
         keep_alive: '10m',
         options: { num_predict: NUM_PREDICT, num_ctx: NUM_CTX, temperature: 0.2 },
       },
@@ -161,7 +169,7 @@ function expectedQuestionTypes(resumeContext) {
   return Object.entries(counts).flatMap(([type, count]) => Array(count).fill(type));
 }
 
-async function generateJsonWithRetry(prompt, role, validate) {
+async function generateJsonWithRetry(prompt, role, validate, responseSchema = QUESTION_RESPONSE_SCHEMA) {
   const startedAt = Date.now();
   const deadline = startedAt + TOTAL_TIMEOUT_MS;
   let attempt = 0;
@@ -176,7 +184,7 @@ async function generateJsonWithRetry(prompt, role, validate) {
       let response;
       try {
         response = await generate(prompt, timeoutMs, () => debugGeneration({ stage: 'first-chunk', role, startedAt,
-          attempt, durationMs: Date.now() - requestStartedAt, timeoutMs, category: 'streaming' }));
+          attempt, durationMs: Date.now() - requestStartedAt, timeoutMs, category: 'streaming' }), responseSchema);
         debugGeneration({ stage: 'request-complete', role, startedAt, attempt,
           durationMs: Date.now() - requestStartedAt, timeoutMs, status: response.status,
           evalTokens: response.evalCount, promptEvalTokens: response.promptEvalCount,
@@ -317,6 +325,145 @@ PLAN ${JSON.stringify({ domain: interviewPlan.primaryDomain, profile: interviewP
 RESUME ${JSON.stringify({ interviewType: c.interviewType, targetRole: c.targetRole,
     skills: c.skills.slice(0, 12), projects: compactProjects, experience: compactExperience,
     experienceSummary: compactExperience.length ? undefined : c.experienceSummary.slice(0, 120), education: c.education.slice(0, 2) })}`;
+}
+
+function buildCategoryQuestionPrompt(resumeContext, categoryId, interviewPlan = interviewPlannerService.buildInterviewPlan(resumeContext)) {
+  const category = getQuestionCategory(categoryId);
+  if (!category) throw Object.assign(new Error('Invalid question category.'), { code: 'invalid-category' });
+  const c = candidateData(resumeContext);
+  c.projects = projectsByPlan(c.projects, interviewPlan);
+  let categoryInstruction = category.instruction;
+  if (category.id === 'project_deep_dive' && !c.projects.length) {
+    categoryInstruction = 'No project entries are listed. Ask hypothetical project design questions using only listed skills, without implying a project exists.';
+  }
+  if (category.id === 'professional_experience' && !c.experience.length && !c.experienceSummary) {
+    categoryInstruction = 'No professional experience entries are listed. Ask about transferable skills or hypothetical responsibilities without implying prior employment.';
+  }
+  const focus = interviewPlan.focusAreas.filter((area) => area.evidence.length).slice(0, 4)
+    .map((area) => ({ topic: area.topic, evidence: area.evidence.slice(0, 2) }));
+  return `Generate exactly ${QUESTION_COUNT_PER_CATEGORY} distinct interview questions only for category: ${category.label}.\n` +
+    `${categoryInstruction}\n` +
+    `Use the target role ${c.targetRole} and interview type ${c.interviewType}. Use only listed evidence; do not invent candidate facts. Avoid definitions and repeated question templates.\n` +
+    `Return compact JSON only: {"questions":["..."]} with exactly ${QUESTION_COUNT_PER_CATEGORY} question strings. Each string is one concise sentence ending in a question mark, at most 180 characters. No labels or extra fields.\n` +
+    `PLAN ${JSON.stringify({ domain: interviewPlan.primaryDomain, focus })}\n` +
+    `RESUME ${JSON.stringify({ skills: c.skills.slice(0, 10), projects: c.projects.slice(0, 3).map((p) => ({ title: p.title, technologies: p.technologies.slice(0, 4), details: p.description.slice(0, 100) })), experience: c.experience.slice(0, 2).map((e) => ({ role: e.role, organisation: e.organisation, responsibilities: e.responsibilities.slice(0, 2) })), education: c.education.slice(0, 2) })}`;
+}
+
+function heuristicFallbackCategoryQuestions(resumeContext, categoryId, interviewPlan = interviewPlannerService.buildInterviewPlan(resumeContext)) {
+  const category = getQuestionCategory(categoryId);
+  if (!category) throw Object.assign(new Error('Invalid question category.'), { code: 'invalid-category' });
+  const c = candidateData(resumeContext);
+  c.projects = projectsByPlan(c.projects, interviewPlan);
+  const role = shortenAnchor(c.targetRole, 45);
+  const skill = shortenAnchor(c.skills[0] || c.projects.flatMap((p) => p.technologies)[0] || interviewPlan.focusAreas[0]?.topic || role, 45);
+  const project = c.projects[0];
+  const experience = c.experience[0];
+  const hasExperience = Boolean(experience || c.experienceSummary);
+  const personalAnchor = shortenAnchor(experience?.role || experience?.organisation || c.experienceSummary || project?.title || c.education[0] || skill, 45);
+  const projectAnchor = shortenAnchor(project?.title || project?.technologies[0] || skill, 120);
+  const prompts = {
+    domain_fundamentals: [
+      `How would you apply ${skill} when reasoning about trade-offs in a ${role} system?`,
+      `Which principles would guide your choice of ${skill} for a ${role} use case, and why?`,
+      `How would you determine whether ${skill} is the right fit for a constrained ${role} problem?`,
+      `What trade-offs would you evaluate when designing a ${role} solution involving ${skill}?`,
+      `How would you explain the role of ${skill} in a reliable ${role} design?`,
+      `Why might a ${role} design choose one ${skill} approach over another?`,
+    ],
+    technical_concepts: [
+      `How would you implement and test ${skill} for a ${role} requirement?`,
+      `How would you debug a failure involving ${skill} and verify the fix?`,
+      `How would you secure an integration that uses ${skill}?`,
+      `How would you test edge cases in a feature built with ${skill}?`,
+      `How would you diagnose a performance issue involving ${skill}?`,
+      `How would you integrate ${skill} with an existing system while limiting regressions?`,
+    ],
+    project_deep_dive: project ? [
+      `What was the key design decision in ${projectAnchor}, and what trade-off did it involve?`,
+      `How would you explain your contribution to ${projectAnchor} using evidence from the resume?`,
+      `What constraint would you address first when extending ${projectAnchor}?`,
+      `How would you test failure cases in ${projectAnchor} and verify expected behavior?`,
+      `Which part of ${projectAnchor} would you redesign, and what evidence supports that choice?`,
+      `How did the technologies in ${projectAnchor} shape its implementation decisions?`,
+    ] : [
+      `What design decision would you make when building a project with ${skill}, and why?`,
+      `What trade-off would you compare for a project using ${skill}?`,
+      `How would you test a project that uses ${skill} under failure conditions?`,
+      `Which constraint would you plan for in a project built with ${skill}?`,
+      `How would you verify an implementation choice for a project using ${skill}?`,
+      `What would you improve first in a project designed around ${skill}?`,
+    ],
+    professional_experience: hasExperience ? [
+      `Which responsibility from your resume best shows your approach to delivering reliable work?`,
+      `What challenge related to ${personalAnchor} would you explain, and how was the outcome verified?`,
+      `How did your listed experience influence a technical decision or delivery choice?`,
+      `Which responsibility in your experience required the most coordination, and why?`,
+      `How would you describe the impact of work associated with ${personalAnchor} without overstating it?`,
+      `What would you improve in a responsibility shown in your resume, and how would you measure the impact?`,
+    ] : [
+      `Which responsibility interests you in a ${role} role, and how could ${skill} support it?`,
+      `What challenge could arise while delivering a ${role} responsibility, and how would you respond?`,
+      `How would you explain a delivery decision for a ${role} responsibility?`,
+      `What evidence would you use to evaluate your impact in a ${role} role?`,
+      `How would you coordinate work with others on a ${role} responsibility?`,
+      `What would you improve if assigned a responsibility in a ${role} role?`,
+    ],
+    applied_scenarios: [
+      `Suppose ${skill} starts failing under load; what would you investigate first and why?`,
+      `If a ${role} service using ${skill} returns inconsistent results, how would you isolate the cause?`,
+      `Given a strict latency limit, how would you adapt a solution involving ${skill}?`,
+      `Imagine an integration using ${skill} is unavailable; what recovery approach would you choose?`,
+      `If a change to ${skill} caused regressions, how would you identify and contain the impact?`,
+      `Suppose a requirement conflicts with the limits of ${skill}; what options would you compare?`,
+    ],
+    behavioral_collaboration: hasExperience || project ? [
+      `Describe how you would communicate a technical disagreement while working with others.`,
+      `How have you used feedback to change an approach shown in your resume?`,
+      `Describe a time you coordinated with a team to resolve a difficult issue.`,
+      `How would you support a teammate blocked by a problem related to ${personalAnchor}?`,
+      `What would you do if stakeholders disagreed about a change involving ${personalAnchor}?`,
+      `How do you take ownership when collaboration reveals a mistake in your work?`,
+    ] : [
+      `How would you communicate a technical disagreement while working with a team?`,
+      `How would you use feedback to improve an approach to ${skill}?`,
+      `How would you coordinate with a team member to resolve a difficult issue?`,
+      `How would you support a team member blocked by a technical problem?`,
+      `What would you do if team members disagreed about a technical change?`,
+      `How would you take ownership when feedback reveals a mistake in your work?`,
+    ],
+  };
+  const questions = validateGeneratedCategoryQuestions({ questions: prompts[category.id].slice(0, QUESTION_COUNT_PER_CATEGORY) }, resumeContext, interviewPlan, category);
+  return { questions, source: 'heuristic-fallback' };
+}
+
+function projectsByPlan(projects, interviewPlan) {
+  const areas = list(interviewPlan?.focusAreas);
+  const relevance = (project) => {
+    const index = areas.findIndex((area) => [project.title, project.description, ...project.technologies]
+      .some((claim) => claim && list(area.evidence).includes(claim)));
+    return index < 0 ? areas.length : index;
+  };
+  return projects.slice().sort((left, right) => relevance(left) - relevance(right));
+}
+
+async function generateCategoryQuestions(resumeContext, categoryId) {
+  const category = getQuestionCategory(categoryId);
+  if (!category) throw Object.assign(new Error('Invalid question category.'), { code: 'invalid-category' });
+  const startedAt = Date.now();
+  const interviewPlan = interviewPlannerService.buildInterviewPlan(resumeContext);
+  const role = candidateData(resumeContext).targetRole;
+  try {
+    const prompt = buildCategoryQuestionPrompt(resumeContext, categoryId, interviewPlan);
+    const questions = await generateJsonWithRetry(prompt, role,
+      (result) => validateGeneratedCategoryQuestions(result, resumeContext, interviewPlan, category), CATEGORY_QUESTION_RESPONSE_SCHEMA);
+    const metadata = questions.map((question) => ({ ...question, type: category.legacyType }));
+    return { category: category.id, questions: metadata, source: 'ollama-llama3.2', status: 'ready' };
+  } catch (err) {
+    debugGeneration({ stage: 'fallback-selected', role, startedAt, attempt: 0,
+      ...safeRequestDetails(err), category: questionGenerationDiagnostic(err) });
+    const fallback = heuristicFallbackCategoryQuestions(resumeContext, categoryId, interviewPlan);
+    return { category: category.id, ...fallback, status: 'ready' };
+  }
 }
 
 /** Deterministic six-question fallback, grounded only in structured evidence. */
@@ -497,7 +644,7 @@ function questionGenerationDiagnostic(err) {
   const parts = [category];
   if (category === 'question-validation-error') {
     const reasons = new Set(['invalid-envelope', 'wrong-question-count', 'invalid-item-shape', 'invalid-type',
-      'empty-or-oversized-field', 'duplicate-question', 'generic-definition', 'invalid-grounding', 'invalid-distribution']);
+      'empty-or-oversized-field', 'duplicate-question', 'generic-definition', 'invalid-grounding', 'invalid-distribution', 'invalid-category-relevance']);
     if (reasons.has(err.code)) parts.push(`reason=${err.code}`);
     if (Number.isSafeInteger(err.questionIndex) && err.questionIndex >= 0) parts.push(`questionIndex=${err.questionIndex}`);
     if (Number.isSafeInteger(err.questionCount) && err.questionCount >= 0) parts.push(`questionCount=${err.questionCount}`);
@@ -527,4 +674,5 @@ async function generateQuestions(resumeContext) {
   }
 }
 
-module.exports = { generateQuestions, heuristicFallbackQuestions, buildQuestionPrompt };
+module.exports = { generateQuestions, heuristicFallbackQuestions, buildQuestionPrompt,
+  generateCategoryQuestions, heuristicFallbackCategoryQuestions, buildCategoryQuestionPrompt };

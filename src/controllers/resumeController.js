@@ -5,6 +5,9 @@ const resumeParserService = require('../services/resumeParserService');
 const ollamaService = require('../services/ollamaService');
 const contextBuilder = require('../services/contextBuilder');
 const questionGeneratorService = require('../services/questionGeneratorService');
+const { getQuestionCategory } = require('../services/questionCategories');
+
+const activeCategoryGenerations = new Set();
 
 async function uploadResume(req, res) {
   try {
@@ -97,4 +100,31 @@ async function getQuestions(req, res) {
   }
 }
 
-module.exports = { uploadResume, getResume, getContext, getQuestions };
+async function generateCategoryQuestions(req, res) {
+  const category = getQuestionCategory(req.params.category);
+  if (!category) return res.status(400).json({ error: 'Unsupported question category.' });
+  const body = req.body;
+  if (body !== undefined && (body === null || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length)) {
+    return res.status(400).json({ error: 'Category generation does not accept request data.' });
+  }
+  try {
+    const record = await findOwnedResume(req);
+    if (!record) return res.status(404).json({ error: 'Resume not found.' });
+    const key = `${req.user.id}:${req.params.id}:${category.id}`;
+    if (activeCategoryGenerations.has(key)) {
+      return res.status(409).json({ error: 'Generation is already in progress for this category.' });
+    }
+    activeCategoryGenerations.add(key);
+    try {
+      const result = await questionGeneratorService.generateCategoryQuestions(record.resumeContext, category.id);
+      return res.json({ ...result, category: category.id });
+    } finally {
+      activeCategoryGenerations.delete(key);
+    }
+  } catch {
+    console.error('[resumeController.generateCategoryQuestions] Failed to read resume or generate questions.');
+    return res.status(500).json({ error: 'Failed to generate questions for this category.' });
+  }
+}
+
+module.exports = { uploadResume, getResume, getContext, getQuestions, generateCategoryQuestions };

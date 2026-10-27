@@ -28,5 +28,6 @@ router.post('/upload', upload.single('resume'), resumeController.uploadResume);
 router.get('/:id', resumeController.getResume);
 router.get('/:id/context', resumeController.getContext);
 router.get('/:id/questions', resumeController.getQuestions);
+router.post('/:id/questions/:category', resumeController.generateCategoryQuestions);
 
 module.exports = router;

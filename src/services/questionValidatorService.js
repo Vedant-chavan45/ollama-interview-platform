@@ -2,6 +2,7 @@
 const MAX_QUESTION_LENGTH = 240;
 const MAX_BASED_ON_LENGTH = 120;
 const TYPES = new Set(['technical', 'project', 'behavioral', 'experience']);
+const { QUESTION_COUNT_PER_CATEGORY } = require('./questionCategories');
 const text = (v) => typeof v === 'string' ? v.trim() : '';
 const list = (v) => Array.isArray(v) ? v : [];
 const object = (v) => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
@@ -12,6 +13,13 @@ const words = (v) => (text(v).toLowerCase().match(/[\p{L}\p{N}]+(?:[.+#]+[\p{L}\
 const connectors = new Set(['the', 'a', 'an', 'and', 'or', 'at', 'in', 'of', 'for', 'with',
   'project', 'projects', 'experience', 'role', 'skill', 'skills']);
 const duplicateKey = (v) => v.toLowerCase().trim().replace(/\s+/g, ' ').replace(/[.!?,;:]+$/, '').trim();
+const shortAnchor = (value) => {
+  const anchor = text(value).replace(/\s+/g, ' ');
+  if (anchor.length <= MAX_BASED_ON_LENGTH) return anchor;
+  const cut = anchor.slice(0, MAX_BASED_ON_LENGTH - 1);
+  const boundary = cut.lastIndexOf(' ');
+  return `${(boundary > MAX_BASED_ON_LENGTH * 0.6 ? cut.slice(0, boundary) : cut).trim()}…`;
+};
 
 function fail(code, questionCount, questionIndex, safeDetails = {}) {
   const error = new Error('Invalid generated questions.');
@@ -56,11 +64,11 @@ function isDefinition(question) {
     !/\b(you|your|our|how|why|when|where|in|for|during|would|could|should)\b/i.test(q);
 }
 
-function validateGeneratedQuestions(result, resumeContext, interviewPlan) {
+function validateGeneratedQuestions(result, resumeContext, interviewPlan, options = {}) {
   const questionCount = Array.isArray(result?.questions) ? result.questions.length : undefined;
   if (!plain(result) || Reflect.ownKeys(result).length !== 1 ||
       !Object.hasOwn(result, 'questions') || !Array.isArray(result.questions)) fail('invalid-envelope', questionCount);
-  if (questionCount !== 6) fail('wrong-question-count', questionCount);
+  if (questionCount !== (options.questionCount || 6)) fail('wrong-question-count', questionCount);
   const grounding = groundingData(resumeContext, interviewPlan);
   const seen = new Set();
   const counts = { technical: 0, project: 0, behavioral: 0, experience: 0 };
@@ -91,9 +99,9 @@ function validateGeneratedQuestions(result, resumeContext, interviewPlan) {
     experience: grounding.hasExperience ? 1 : 0,
     behavioral: 1,
   };
-  if (counts.behavioral !== 1 || counts.technical < 2 ||
+  if (!options.skipDistribution && (counts.behavioral !== 1 || counts.technical < 2 ||
       (grounding.hasProjects ? counts.project < 2 : counts.project !== 0) ||
-      counts.experience !== (grounding.hasExperience ? 1 : 0)) {
+      counts.experience !== (grounding.hasExperience ? 1 : 0))) {
     fail('invalid-distribution', questionCount, undefined, {
       actualTypeCounts: counts, expectedTypeCounts,
     });
@@ -101,4 +109,60 @@ function validateGeneratedQuestions(result, resumeContext, interviewPlan) {
   return questions;
 }
 
-module.exports = { validateGeneratedQuestions };
+function validateGeneratedCategoryQuestions(result, resumeContext, interviewPlan, category) {
+  const questionCount = Array.isArray(result?.questions) ? result.questions.length : undefined;
+  if (!plain(result) || Reflect.ownKeys(result).length !== 1 ||
+      !Object.hasOwn(result, 'questions') || !Array.isArray(result.questions)) fail('invalid-envelope', questionCount);
+  if (questionCount !== QUESTION_COUNT_PER_CATEGORY) fail('wrong-question-count', questionCount);
+  const c = object(resumeContext);
+  const skills = list(c.skills).map(text).filter(Boolean);
+  const projects = list(c.projects).map(object);
+  const experience = list(c.experience).map(object);
+  const education = list(c.education).map(object);
+  const focusAreas = list(interviewPlan?.focusAreas);
+  projects.sort((left, right) => {
+    const relevance = (project) => {
+      const index = focusAreas.findIndex((area) => [text(project.title), text(project.description), ...list(project.technologies).map(text)]
+        .some((claim) => claim && list(object(area).evidence).map(text).includes(claim)));
+      return index < 0 ? focusAreas.length : index;
+    };
+    return relevance(left) - relevance(right);
+  });
+  const allAnchors = [...skills,
+    ...projects.flatMap((p) => [text(p.title), ...list(p.technologies).map(text), text(p.description)]),
+    ...experience.flatMap((e) => [text(e.role), text(e.organisation), ...list(e.responsibilities).map(text)]),
+    ...education.flatMap((e) => [text(e.degree), text(e.institution)]), text(c.experienceSummary), text(c.targetRole)]
+    .filter(Boolean);
+  const categoryAnchors = category.id === 'project_deep_dive'
+    ? [...projects.flatMap((p) => [text(p.title), ...list(p.technologies).map(text), text(p.description)]), ...skills]
+    : category.id === 'professional_experience'
+      ? [...experience.flatMap((e) => [text(e.role), text(e.organisation), ...list(e.responsibilities).map(text)]), text(c.experienceSummary), ...skills]
+      : category.id === 'behavioral_collaboration'
+        ? [...experience.flatMap((e) => [text(e.role), text(e.organisation), ...list(e.responsibilities).map(text)]), text(c.experienceSummary), ...projects.map((p) => text(p.title)), ...education.map((e) => text(e.degree))]
+        : [...skills, ...list(interviewPlan?.focusAreas).flatMap((a) => list(object(a).evidence).map(text)), ...allAnchors];
+  const anchor = shortAnchor(categoryAnchors.find(Boolean) || (category.legacyType === 'behavioral' ? 'general' : text(c.targetRole)));
+  const hasProjects = projects.some((project) => text(project.title) || text(project.description) || list(project.technologies).some(text));
+  const hasExperience = experience.length > 0 || Boolean(text(c.experienceSummary));
+  const questions = result.questions.map((question, index) => {
+    if (typeof question !== 'string') fail('invalid-item-shape', questionCount, index);
+    if (!category.relevance.test(question)) fail('invalid-category-relevance', questionCount, index);
+    if (category.id === 'project_deep_dive' && !hasProjects && !/\b(would|could|if|suppose|imagine|possible|building|build)\b/i.test(question)) {
+      fail('invalid-category-relevance', questionCount, index);
+    }
+    if (category.id === 'professional_experience' && !hasExperience && !/\b(would|could|if|suppose|imagine|interest\w*)\b/i.test(question)) {
+      fail('invalid-category-relevance', questionCount, index);
+    }
+    let basedOn = anchor;
+    if (category.id === 'project_deep_dive') {
+      const matchingProject = projects.map((project) => text(project.title)).filter(Boolean)
+        .find((title) => question.toLowerCase().includes(shortAnchor(title).toLowerCase()));
+      if (projects.some((project) => text(project.title)) && !matchingProject) fail('invalid-grounding', questionCount, index);
+      if (matchingProject) basedOn = shortAnchor(matchingProject);
+    }
+    return { question, type: category.legacyType, basedOn };
+  });
+  return validateGeneratedQuestions({ questions }, resumeContext, interviewPlan,
+    { skipDistribution: true, questionCount: QUESTION_COUNT_PER_CATEGORY });
+}
+
+module.exports = { validateGeneratedQuestions, validateGeneratedCategoryQuestions };

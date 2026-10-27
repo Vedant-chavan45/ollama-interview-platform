@@ -42,7 +42,7 @@
     </section>
     <section id="workspacePlaceholder" class="workspace-placeholder" aria-labelledby="placeholderTitle"><h2 id="placeholderTitle">A clearer picture of your experience</h2><p>Your analysis, parsed resume and personalized questions will appear here after you analyze a resume.</p></section>
     <section id="results" aria-labelledby="resultsTitle" hidden>
-      <div class="results-header"><p class="eyebrow">Resume workspace</p><h2 id="resultsTitle" tabindex="-1">Your results</h2><p id="resultsContext" class="results-context"></p><p id="resultsFile" class="results-context"></p></div>
+      <div id="resumeWorkspaceSummary" class="results-header"><p class="eyebrow">Resume workspace</p><h2 id="resultsTitle" tabindex="-1">Your results</h2><p id="resultsContext" class="results-context"></p><p id="resultsFile" class="results-context"></p></div>
       <p id="previousResultsNote" class="status status-warning" hidden>These results belong to your previous analysis. They will be replaced only when the new analysis succeeds.</p>
       <div id="tabs" class="tabs" role="tablist" aria-label="Resume results">
         <button class="tab" id="tabOverview" type="button" role="tab" aria-selected="true" aria-controls="overviewPanel" tabindex="0">Overview</button>
@@ -53,11 +53,26 @@
         <div class="overview-grid"><section class="panel content-panel" aria-labelledby="analysisTitle"><h3 id="analysisTitle">Your analysis</h3><div id="analysisSource" class="source-line"></div><p class="small secondary">Generated interpretation of your resume, separate from the extracted facts.</p><div id="analysisContent" class="analysis-group"></div></section><section class="panel content-panel" aria-labelledby="keySkillsTitle"><h3 id="keySkillsTitle">Skills from your resume</h3><div id="keySkills"></div><dl id="resumeFacts" class="facts"></dl><button id="viewDetails" type="button" class="btn btn-quiet full-width">Explore resume details</button><button id="prepareQuestions" type="button" class="btn btn-primary full-width">Prepare interview questions</button></section></div>
       </div>
       <div id="detailsPanel" class="tabpanel" role="tabpanel" aria-labelledby="tabDetails" tabindex="0" hidden><button id="backToOverview" type="button" class="btn btn-secondary back-overview">Back to Overview</button><details id="extractionNotes" class="panel" hidden><summary>Extraction notes</summary><ul id="extractionNotesList" class="small secondary"></ul></details><div id="resumeDetails" class="details-grid"></div></div>
-      <section id="questionsPanel" class="panel content-panel" aria-labelledby="questionsStageTitle" tabindex="-1" hidden>
-        <div class="questions-toolbar"><div><h3 id="questionsStageTitle">Practice with purpose</h3><p>Questions grounded in your resume and the interview context submitted with this analysis.</p><p id="questionContext"></p></div></div>
-        <div id="questionsSource"></div>
-        <div id="questionsEmpty" class="question-empty"><h4>Your next step: prepare your answers</h4><p>Generate questions to explore your skills, projects and experience.</p></div>
-        <ol id="questionsList" class="question-list"></ol>
+      <section id="questionsPanel" class="question-workflow" aria-labelledby="questionsStageTitle" tabindex="-1" hidden>
+        <div class="questions-toolbar"><div><p class="eyebrow">Interview Preparation</p><h3 id="questionsStageTitle">Interview Questions</h3><p id="questionContext" class="questions-context"></p></div><button id="backToAnalysis" type="button" class="btn btn-secondary">Back to Analysis</button></div>
+        <section class="preparation-summary panel" aria-labelledby="preparationSummaryTitle">
+          <div class="preparation-summary-copy"><h4 id="preparationSummaryTitle">Preparation progress</h4><p id="preparedCount" class="prepared-count">0 of 6 categories prepared</p></div>
+          <div id="preparedProgress" class="preparation-progress" role="progressbar" aria-label="Categories with usable question sets" aria-valuemin="0" aria-valuemax="6" aria-valuenow="0" aria-valuetext="0 of 6 categories prepared"><div id="preparedProgressFill" class="preparation-progress-fill"></div></div>
+          <p class="preparation-caption">Question sets remain available as you move between categories.</p>
+        </section>
+        <div class="category-workspace">
+          <aside class="category-navigator panel" aria-labelledby="categoryChecklistTitle">
+            <div class="category-navigator-heading"><h4 id="categoryChecklistTitle">Question categories</h4><p>Choose a category to view or prepare its questions.</p></div>
+            <ol id="categoryChecklist" class="category-checklist-list" aria-label="Question category checklist"></ol>
+          </aside>
+          <section id="selectedCategoryPanel" class="selected-category panel" aria-labelledby="selectedCategoryTitle">
+            <div class="selected-category-heading"><div><p class="eyebrow">Selected category</p><h4 id="selectedCategoryTitle">Select a question category</h4><p id="selectedCategoryDescription" class="secondary">Choose a category to view its workspace.</p></div><div id="categorySource" class="category-source"></div></div>
+            <p id="selectedCategoryStatus" class="category-workspace-status" role="status" aria-live="polite">Choose a category to view or generate its questions.</p>
+            <p id="selectedCategoryError" class="status status-error" role="alert" hidden></p>
+            <div class="category-action-area"><p id="categoryActionDescription">Generate six questions for this category only. Your other category sets will stay available.</p><button id="generateCategoryButton" type="button" class="btn btn-primary"><span id="generateCategoryLabel">Generate 6 Questions</span><span id="generateCategorySpinner" class="spinner" aria-hidden="true" hidden></span></button></div>
+            <ol id="categoryQuestionList" class="question-list"></ol>
+          </section>
+        </div>
       </section>
       <details class="technical" id="technicalDetails"><summary>Technical details</summary><p class="small secondary">Original response for this resume analysis.</p><pre id="rawJson" tabindex="0" aria-label="Raw resume analysis response"></pre></details>
     </section>
