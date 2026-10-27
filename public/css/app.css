@@ -12,6 +12,8 @@
 .workflow button { width: 100%; display: flex; align-items: center; gap: var(--s3); min-height: 64px; text-align: left; padding: var(--s3) var(--s4); border: 1px solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); }
 .workflow button[aria-current="step"] { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-hover); }
 .workflow button:hover:not(:disabled) { border-color: var(--accent); }
+.workflow button:disabled { color: var(--text-muted); background: var(--surface-secondary); border-style: dashed; cursor: not-allowed; }
+.workflow button:disabled .workflow-number { color: var(--text-muted); }
 .workflow-number { display: grid; place-items: center; border: 1px solid var(--border); background: var(--surface); width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%; font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .workflow-name { font-weight: var(--weight-medium); font-size: var(--text-sm); }
 .workflow-state { display: block; font-size: var(--text-xs); margin-top: var(--s1); }
@@ -47,7 +49,7 @@
 .results-header .eyebrow { margin-bottom: var(--s2); }
 .results-context { color: var(--text-secondary); font-size: var(--text-sm); margin-top: var(--s2); }
 #previousResultsNote { margin-bottom: var(--s4); }
-.tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--border); margin-bottom: var(--s6); }
+.tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--border); margin-bottom: var(--s6); }
 .tab { min-width: 0; min-height: 52px; padding: var(--s3) var(--s2); border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--text-secondary); font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .tab:hover { background: var(--surface-secondary); }
 .tab[aria-selected="true"] { color: var(--accent-hover); border-bottom-color: var(--accent); }
@@ -69,6 +71,7 @@
 .facts dt { color: var(--text-secondary); font-size: var(--text-sm); }
 .facts dd { margin: 0; font-size: var(--text-card); font-weight: var(--weight-medium); }
 .details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s6); }
+.back-overview { margin-bottom: var(--s6); }
 .details-wide { grid-column: 1 / -1; }
 .entry + .entry { padding-top: var(--s6); margin-top: var(--s6); border-top: 1px solid var(--border); }
 .entry p + p, .entry .pill-list { margin-top: var(--s3); }

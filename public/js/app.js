@@ -5,8 +5,8 @@
   const state = { token: '', authenticated: false, leaving: false, file: null, current: null,
     uploadBusy: false, questionBusy: false, uploadId: 0, questionId: 0, authId: 0, questions: [] };
   let authRequest, uploadRequest, questionRequest;
-  const tabs = ['tabOverview', 'tabDetails', 'tabQuestions'].map($);
-  const panels = ['overviewPanel', 'detailsPanel', 'questionsPanel'].map($);
+  const tabs = ['tabOverview', 'tabDetails'].map($);
+  const panels = ['overviewPanel', 'detailsPanel'].map($);
   const text = value => typeof value === 'string' || typeof value === 'number' ? String(value) : '';
   const strings = value => Array.isArray(value) ? value.filter(item => typeof item === 'string' && item.trim()) : [];
   const records = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
@@ -82,21 +82,33 @@
     $('setupForm').setAttribute('aria-busy', String(state.uploadBusy));
     $('processing').hidden = !state.uploadBusy;
     $('editSetup').disabled = state.uploadBusy;
-    $('generateQuestionsBtn').disabled = !state.current || state.uploadBusy || state.questionBusy || !state.authenticated;
     $('questionsList').setAttribute('aria-busy', String(state.questionBusy));
-    $('stepAnalysis').disabled = $('stepQuestions').disabled = !state.current;
+    $('prepareQuestions').disabled = !state.current || state.uploadBusy || state.questionBusy || !state.authenticated;
+    if (state.questionBusy) $('prepareQuestions').textContent = 'Preparing questions...';
+    $('stepAnalysis').disabled = !state.current;
+    $('stepQuestions').disabled = !state.questions.length || !state.authenticated || state.uploadBusy;
+    $('questionsStepHelp').hidden = Boolean(state.questions.length);
+    $('questionsStepHelp').textContent = state.questions.length ? '' : 'Locked: prepare questions from Overview';
+    if (state.questions.length) $('stepQuestions').removeAttribute('aria-describedby');
+    else $('stepQuestions').setAttribute('aria-describedby', 'questionsStepHelp');
   }
   function setStep(index) {
     ['stepResume', 'stepAnalysis', 'stepQuestions'].forEach((id, i) => {
       if (i === index) $(id).setAttribute('aria-current', 'step'); else $(id).removeAttribute('aria-current');
     });
+    const inQuestions = index === 2;
+    $('tabs').hidden = inQuestions;
+    $('questionsStatus').hidden = inQuestions;
+    $('overviewPanel').hidden = inQuestions || $('tabOverview').getAttribute('aria-selected') !== 'true';
+    $('detailsPanel').hidden = inQuestions || $('tabDetails').getAttribute('aria-selected') !== 'true';
+    $('questionsPanel').hidden = !inQuestions;
   }
   function selectTab(index, focus = false) {
     tabs.forEach((tab, i) => {
       tab.setAttribute('aria-selected', String(i === index)); tab.tabIndex = i === index ? 0 : -1;
       panels[i].hidden = i !== index;
     });
-    setStep(index === 2 ? 2 : 1);
+    setStep(1);
     if (focus) tabs[index].focus();
   }
   tabs.forEach((tab, index) => {
@@ -121,9 +133,12 @@
   $('editSetup').addEventListener('click', () => { expandSetup($('setupForm').hidden); if (!$('setupForm').hidden) focusSection($('setupTitle')); });
   $('stepResume').addEventListener('click', () => { expandSetup(); focusSection($('setupTitle')); });
   $('stepAnalysis').addEventListener('click', () => { selectTab(0); focusSection($('resultsTitle')); });
-  $('stepQuestions').addEventListener('click', () => { selectTab(2, true); });
+  $('stepQuestions').addEventListener('click', () => {
+    if (!state.questions.length || $('stepQuestions').disabled) return;
+    setStep(2); focusSection($('questionsStageTitle'));
+  });
   $('viewDetails').addEventListener('click', () => selectTab(1, true));
-  $('prepareQuestions').addEventListener('click', () => selectTab(2, true));
+  $('backToOverview').addEventListener('click', () => { selectTab(0); $('tabOverview').focus(); });
 
   function markDraft() {
     if (state.current) $('setupHelp').textContent = 'Changes apply when you analyze again. Current results keep their submitted context.';
@@ -260,12 +275,12 @@
     $('questionsList').replaceChildren(); $('questionsSource').replaceChildren(); status('questionsStatus');
     $('questionsEmpty').hidden = false;
     $('questionsEmpty').replaceChildren(node('h4', 'Your next step: prepare your answers'), node('p', 'Generate questions to explore your skills, projects and experience.'));
-    $('generateQuestionsBtn').textContent = 'Generate questions';
+    $('prepareQuestions').textContent = 'Prepare interview questions';
     $('workspacePlaceholder').hidden = true; $('results').hidden = false;
     $('previousResultsNote').hidden = true; $('editSetup').hidden = false;
     $('analysisStepState').textContent = 'Analysis ready'; $('questionsStepState').textContent = 'Ready to generate';
     $('resumeStepState').textContent = 'Resume analyzed';
-    expandSetup(false); selectTab(0); focusSection($('resultsTitle'));
+    expandSetup(false); syncControls(); selectTab(0); focusSection($('resultsTitle'));
   }
 
   $('setupForm').addEventListener('submit', async event => {
@@ -275,7 +290,7 @@
     const id = ++state.uploadId;
     uploadRequest?.abort(); uploadRequest = new AbortController();
     state.questionId++; questionRequest?.abort(); state.questionBusy = false;
-    status('questionsStatus'); $('generateQuestionsBtn').textContent = state.questions.length ? 'Regenerate questions' : 'Generate questions';
+    status('questionsStatus');
     state.uploadBusy = true; status('uploadStatus'); syncControls();
     $('previousResultsNote').hidden = !state.current;
     $('analysisStepState').textContent = 'Processing resume';
@@ -308,7 +323,7 @@
     }
   });
 
-  $('generateQuestionsBtn').addEventListener('click', async () => {
+  $('prepareQuestions').addEventListener('click', async () => {
     if (!state.current || state.questionBusy || state.uploadBusy || !state.authenticated || state.leaving) return;
     const resumeId = state.current.id;
     const uploadId = state.uploadId;
@@ -316,7 +331,7 @@
     questionRequest?.abort(); questionRequest = new AbortController();
     const current = () => id === state.questionId && uploadId === state.uploadId && resumeId === state.current?.id && !state.leaving;
     state.questionBusy = true; syncControls();
-    $('generateQuestionsBtn').textContent = 'Generating questions...';
+    $('prepareQuestions').textContent = 'Preparing questions...';
     status('questionsStatus', state.questions.length ? 'Preparing a new set. Your previous questions remain below.' : 'Preparing questions from your resume and interview context...');
     try {
       const res = await fetch(`/api/resume/${encodeURIComponent(resumeId)}/questions`, { headers: headers(), signal: questionRequest.signal });
@@ -328,7 +343,7 @@
       const questions = records(data.questions).filter(q => text(q.question).trim());
       if (!questions.length) {
         status('questionsStatus', 'No questions were returned. Try generating again. Any previous questions are still shown.', 'warning');
-        $('generateQuestionsBtn').textContent = 'Retry generation'; return;
+        $('prepareQuestions').textContent = 'Retry question preparation'; return;
       }
       const fragment = document.createDocumentFragment();
       questions.forEach(question => {
@@ -341,12 +356,14 @@
       $('questionsList').replaceChildren(fragment); state.questions = questions;
       $('questionsEmpty').hidden = true; source($('questionsSource'), data.source);
       status('questionsStatus', `${questions.length} questions ready. Take your time and practice each answer.`, 'success');
-      $('generateQuestionsBtn').textContent = 'Regenerate questions';
+      $('prepareQuestions').textContent = 'Regenerate interview questions';
       $('questionsStepState').textContent = 'Questions ready';
+      syncControls();
+      setStep(2); focusSection($('questionsStageTitle'));
     } catch (err) {
       if (!current() || err.name === 'AbortError') return;
       status('questionsStatus', 'Unable to generate questions. Please retry. Any previous questions remain available below.', 'error');
-      $('generateQuestionsBtn').textContent = 'Retry generation';
+      $('prepareQuestions').textContent = 'Retry question preparation';
     } finally {
       if (current()) { state.questionBusy = false; syncControls(); }
     }
